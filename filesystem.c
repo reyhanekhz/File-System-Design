@@ -36,7 +36,8 @@ int write_metadata(int file_descriptor, int index, const file_metadata *meta) {
 
 int find_file_by_name(int file_descriptor, const char *filename) {
     file_metadata meta;
-    for (int i = 0; i < MAX_FILES; i++) {
+    int i;
+    for (i = 0; i < MAX_FILES; i++) {
         // Read each file's metadata
         if (read_metadata(file_descriptor, i, &meta) != 0) continue;
         if (meta.name[0] == 0) continue;
@@ -49,7 +50,8 @@ int find_file_by_name(int file_descriptor, const char *filename) {
 int find_free_metadata_slot(int file_descriptor) {
     file_metadata meta;
     // Find last empty file
-    for (int i = 0; i < MAX_FILES; i++) {
+    int i;
+    for (i = 0; i < MAX_FILES; i++) {
         if (read_metadata(file_descriptor, i, &meta) != 0) continue;
         if (meta.name[0] == 0) return i;
     }
@@ -61,8 +63,8 @@ file_handler open_file(int file_descriptor, const char *filename, int flags) {
     file_handler fh = {
         .metadata_index = -1,
         .pos = 0,
-        .is_open = 0,
-    }
+        .is_open = 0
+    };
 
     int index = find_file_by_name(file_descriptor, filename);
 
@@ -144,7 +146,7 @@ int fs_write(int file_descriptor, file_handler *fh, int32_t pos, const char *buf
     if (!fh->is_open) return -1;
 
     file_system_header header;
-    read_header(file_descriptor, &header);
+    read_fs_header(file_descriptor, &header);
 
     file_metadata meta;
     read_metadata(file_descriptor, fh->metadata_index, &meta);
@@ -161,7 +163,7 @@ int fs_write(int file_descriptor, file_handler *fh, int32_t pos, const char *buf
 
     // Write new metadata + new header
     write_metadata(file_descriptor, fh->metadata_index, &meta);
-    write_header(file_descriptor, &header);
+    write_fs_header(file_descriptor, &header);
 
     // Write data
     off_t offset = meta.data_offset + pos;
@@ -197,9 +199,9 @@ int rm_file(int file_descriptor, file_handler *fh) {
 
     // Decrement header's file count
     file_system_header header;
-    read_header(file_descriptor, &header);
+    read_fs_header(file_descriptor, &header);
     header.files_count--;
-    write_header(file_descriptor, &header);
+    write_fs_header(file_descriptor, &header);
 
     fh->is_open = 0;
     return 0;
@@ -223,7 +225,7 @@ int get_file_stats(int file_descriptor, file_handler *fh) {
 int get_fs_stats(int file_descriptor) {
     file_system_header header;
 
-    if (read_header(file_descriptor, &header) != 0) {
+    if (read_fs_header(file_descriptor, &header) != 0) {
         printf("Error reading header.\n");
         return -1;
     }

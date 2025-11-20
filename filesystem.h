@@ -33,7 +33,7 @@ typedef struct {
 
 
 
-#define MAX_FILES 1024;
+#define MAX_FILES 1024
 #define CREATE 1
 
 
