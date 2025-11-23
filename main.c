@@ -178,6 +178,44 @@ int main() {
             continue;
         }
 
+        // SHRINK
+        if (sscanf(command, "shrink %s %d", arg1, &n) == 2) {
+
+            int idx = find_file_by_name(file_descriptor, arg1);
+            if (idx == -1) {
+                printf("File not found.\n");
+                continue;
+            }
+
+            file_handler fh = { idx, 0, 1 };
+
+            if (shrink_file(file_descriptor, &fh, n) == 0)
+                printf("File %s shrunk to %d bytes.\n", arg1, n);
+            else
+                printf("Shrink failed.\n");
+
+            continue;
+        }
+
+        // CLOSE
+        if (sscanf(command, "close %s", arg1) == 1) {
+
+            int idx = find_file_by_name(file_descriptor, arg1);
+            if (idx == -1) {
+                printf("File not found.\n");
+                continue;
+            }
+
+            file_handler fh = { idx, 0, 1 };
+
+            if (close_file(&fh) == 0)
+                printf("Closed %s.\n", arg1);
+            else
+                printf("Close failed.\n");
+
+            continue;
+        }
+
         // EXIT
         if (strcmp(command, "exit\n") == 0)
             break;

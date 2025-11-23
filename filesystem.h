@@ -50,7 +50,7 @@ int find_free_metadata_slot(int file_descriptor);
 
 // Open/close
 file_handler open_file(int file_descriptor, const char *filename, int flags);
-void close_file(file_handler *fh);
+int close_file(file_handler *fh);
 
 // Read / Write
 int fs_read(int file_descriptor, file_handler *fh, int32_t pos, int32_t n, char *buffer);

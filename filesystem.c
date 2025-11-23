@@ -113,11 +113,14 @@ file_handler open_file(int file_descriptor, const char *filename, int flags) {
     fh.is_open = 1;
     return fh;
 }
+int close_file(file_handler *fh) {
+    if (!fh->is_open)
+        return -1;
 
-void close_file(file_handler *fh) {
     fh->is_open = 0;
-}
 
+    return 0;
+}
 
 
 int fs_read(int file_descriptor, file_handler *fh, int32_t pos, int32_t n, char *buffer) {
