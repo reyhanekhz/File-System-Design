@@ -48,12 +48,15 @@ int initialize_filesystem(const char *path, int32_t size_bytes) {
     int32_t header_size = sizeof(file_system_header);
     int32_t metadata_size = sizeof(file_metadata);
 
-    header.last_allocated_offset = header_size + metadata_size * MAX_FILES;
+    int32_t metadata_area = sizeof(file_metadata) * MAX_FILES;
+    int32_t freeblock_area = sizeof(free_block) * MAX_FREE_BLOCKS;
+
+    // DATA START = end of header + metadata + free blocks
+    header.last_allocated_offset = header_size + metadata_area + freeblock_area;
 
     // Write header
     lseek(file_descriptor, 0, SEEK_SET);
     write(file_descriptor, &header, sizeof(header));
-
     // Zero metadata
     char zero[4096] = {0};
     lseek(file_descriptor, header_size, SEEK_SET);
@@ -64,6 +67,19 @@ int initialize_filesystem(const char *path, int32_t size_bytes) {
         write(file_descriptor, zero, chunk);
         total_meta -= chunk;
     }
+
+    // Zero free-block area (VERY IMPORTANT)
+    lseek(file_descriptor, header_size + metadata_area, SEEK_SET);
+
+    size_t total_fb = sizeof(free_block) * MAX_FREE_BLOCKS;
+    while (total_fb > 0) {
+        size_t chunk = total_fb > 4096 ? 4096 : total_fb;
+        write(file_descriptor, zero, chunk);
+        total_fb -= chunk;
+    }
+
+    // Initialize free list (the missing part causing freeze)
+    init_free_list(file_descriptor);
 
     fsync(file_descriptor);
 
