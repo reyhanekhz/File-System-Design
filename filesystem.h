@@ -84,7 +84,7 @@ int free_space(int file_descriptor, int32_t start, int32_t size);
 // Free list block read/write
 int read_free_block(int file_descriptor, int index, free_block *block);
 int write_free_block(int file_descriptor, int index, const free_block *block);
-
+void print_free_list(int file_descriptor);
 #define MAX_FREE_BLOCKS 1024
 
 

@@ -286,6 +286,119 @@ int write_free_block(int file_descriptor, int index, const free_block *block) {
     return write(file_descriptor, block, sizeof(*block)) == sizeof(*block) ? 0 : -1;
 }
 
+
+static int zero_free_block_slot(int fd, int index) {
+    free_block empty;
+    empty.start = -1;   
+    empty.size  = 0;
+    empty.next  = -1;
+    return write_free_block(fd, index, &empty);
+}
+static int insert_free_block_sorted(int fd, int slot, const free_block *blk_in)
+{
+    file_system_header header;
+    if (read_fs_header(fd, &header) != 0)
+        return -1;
+
+    int head = header.free_list_head;
+
+    free_block newblk;
+    newblk.start = blk_in->start;
+    newblk.size  = blk_in->size;
+    newblk.next  = -1;
+
+    // Always ZERO slot before writing (critical fix)
+    zero_free_block_slot(fd, slot);
+
+    // Case 1: empty list
+    if (head == -1 || head >= MAX_FREE_BLOCKS) {
+        if (write_free_block(fd, slot, &newblk) != 0) return -1;
+        header.free_list_head = slot;
+        return write_fs_header(fd, &header);
+    }
+
+    free_block headblk;
+    if (read_free_block(fd, head, &headblk) != 0)
+        return -1;
+
+    // Case 2: insert before head
+    if (newblk.start < headblk.start) {
+        newblk.next = head;
+        if (write_free_block(fd, slot, &newblk) != 0) return -1;
+        header.free_list_head = slot;
+        return write_fs_header(fd, &header);
+    }
+
+    // Case 3: find insertion point
+    int prev = head;
+    int cur = headblk.next;
+
+    while (cur != -1) {
+        free_block curblk;
+        if (read_free_block(fd, cur, &curblk) != 0)
+            return -1;
+
+        if (newblk.start < curblk.start)
+            break;
+
+        prev = cur;
+        cur = curblk.next;
+    }
+
+    // Fix prev FIRST
+    free_block prevblk;
+    if (read_free_block(fd, prev, &prevblk) != 0)
+        return -1;
+
+    prevblk.next = slot;
+    if (write_free_block(fd, prev, &prevblk) != 0)
+        return -1;
+
+    // Now write new block
+    newblk.next = cur;
+    if (write_free_block(fd, slot, &newblk) != 0)
+        return -1;
+
+    return 0;
+}
+
+
+
+// Find index of first free block (by linked-list traversal) with size >= requested (first-fit).
+// Returns index of free_block slot or -1 if none.
+int find_free_block(int file_descriptor, int32_t size) {
+    file_system_header header;
+    if (read_fs_header(file_descriptor, &header) != 0) return -1;
+
+    int cur = header.free_list_head;
+    free_block blk;
+    while (cur != -1) {
+        if (read_free_block(file_descriptor, cur, &blk) != 0) return -1;
+        if (blk.size >= size) return cur;
+        cur = blk.next;
+    }
+    return -1;
+}
+
+// Debug / viz: print free list in order
+void print_free_list(int file_descriptor) {
+    file_system_header header;
+    if (read_fs_header(file_descriptor, &header) != 0) {
+        printf("Cannot read header.\n");
+        return;
+    }
+
+    printf("Free-list (head = %d):\n", header.free_list_head);
+
+    int cur = header.free_list_head;
+    free_block blk;
+    while (cur != -1) {
+        if (read_free_block(file_descriptor, cur, &blk) != 0) break;
+        printf("  slot=%d start=%d size=%d next=%d\n", cur, blk.start, blk.size, blk.next);
+        cur = blk.next;
+    }
+}
+
 int init_free_list(int file_descriptor) {
     file_system_header header;
     read_fs_header(file_descriptor, &header);
@@ -306,64 +419,88 @@ int init_free_list(int file_descriptor) {
 
     return 0;
 }
+// allocate_space: first-fit on sorted free list (bounded search)
+int allocate_space(int file_descriptor, int32_t size) {
+    if (size <= 0) return -1;
 
-
-int allocate_space(int fd, int32_t size) {
     file_system_header header;
-    read_fs_header(fd, &header);
+    if (read_fs_header(file_descriptor, &header) != 0) return -1;
 
     int prev = -1;
-    int cur  = header.free_list_head;
-
+    int cur = header.free_list_head;
     free_block blk;
+    int iter = 0;
 
-    while (cur != -1) {
-        if (read_free_block(fd, cur, &blk) != 0)
-            return -1;
+    while (cur != -1 && iter < MAX_FREE_BLOCKS) {
+        if (cur < 0 || cur >= MAX_FREE_BLOCKS) return -1;
+        if (read_free_block(file_descriptor, cur, &blk) != 0) return -1;
 
         if (blk.size >= size) {
-
             int alloc_start = blk.start;
 
-            blk.start += size;
-            blk.size  -= size;
-
-            if (blk.size == 0) {
-                if (prev == -1) header.free_list_head = blk.next;
-                else {
-                    free_block p;
-                    read_free_block(fd, prev, &p);
-                    p.next = blk.next;
-                    write_free_block(fd, prev, &p);
+            // If exact fit, remove the block node from list
+            if (blk.size == size) {
+                if (prev == -1) {
+                    header.free_list_head = blk.next;
+                } else {
+                    free_block prevblk;
+                    if (read_free_block(file_descriptor, prev, &prevblk) != 0) return -1;
+                    prevblk.next = blk.next;
+                    if (write_free_block(file_descriptor, prev, &prevblk) != 0) return -1;
                 }
+                // zero-out this slot
+                zero_free_block_slot(file_descriptor, cur);
             } else {
-                write_free_block(fd, cur, &blk);
+                // consume from the beginning of the free block
+                blk.start += size;
+                blk.size  -= size;
+                if (write_free_block(file_descriptor, cur, &blk) != 0) return -1;
             }
 
-            write_fs_header(fd, &header);
+            // persist header changes (if any)
+            if (write_fs_header(file_descriptor, &header) != 0) return -1;
             return alloc_start;
         }
 
         prev = cur;
         cur = blk.next;
+        iter++;
     }
 
-    return -1;
+    return -1; // no suitable block
 }
 
 
 int find_free_block_slot(int fd) {
     free_block blk;
     for (int i = 0; i < MAX_FREE_BLOCKS; i++) {
-        read_free_block(fd, i, &blk);
-        if (blk.size == 0) return i;   // empty block
+        if (read_free_block(fd, i, &blk) != 0) {
+            // If read fails treat as empty (to avoid blocking), but keep trying
+            continue;
+        }
+        if (blk.start == -1 && blk.size == 0)
+            return i;
+
     }
     return -1;
 }
+
+
 int free_space(int file_descriptor, int32_t start, int32_t size) {
+    if (size <= 0) return -1;
 
     file_system_header header;
-    read_fs_header(file_descriptor, &header);
+    if (read_fs_header(file_descriptor, &header) != 0) return -1;
+
+    // Basic validation: start must be >= data region start
+    int32_t header_size = sizeof(file_system_header);
+    int32_t metadata_total = sizeof(file_metadata) * MAX_FILES;
+    int32_t freeblocks_total = sizeof(free_block) * MAX_FREE_BLOCKS;
+    int32_t data_start = header_size + metadata_total + freeblocks_total;
+    if (start < data_start) {
+        // invalid free region (would overlap metadata / free-block table)
+        return -1;
+    }
 
     int slot = find_free_block_slot(file_descriptor);
     if (slot == -1) {
@@ -371,42 +508,55 @@ int free_space(int file_descriptor, int32_t start, int32_t size) {
         return -1;
     }
 
-    free_block new_block;
-    new_block.start = start;
-    new_block.size  = size;
-    new_block.next  = header.free_list_head;
+    free_block newb;
+    newb.start = start;
+    newb.size  = size;
+    newb.next  = -1;
 
-    write_free_block(file_descriptor, slot, &new_block);
-
-    header.free_list_head = slot;
-    write_fs_header(file_descriptor, &header);
+    if (insert_free_block_sorted(file_descriptor, slot, &newb) != 0) {
+        zero_free_block_slot(file_descriptor, slot);
+        return -1;
+    }
 
     merge_free_list(file_descriptor);
-
     return 0;
 }
 
-void merge_free_list(int file_descriptor) {
-    free_block a, b;
 
-    for (int i = 0; i < MAX_FREE_BLOCKS; i++) {
-        if (read_free_block(file_descriptor, i, &a) != 0) continue;
-        if (a.size == 0) continue;
+void merge_free_list(int fd)
+{
+    file_system_header header;
+    read_fs_header(fd, &header);
 
-        for (int j = 0; j < MAX_FREE_BLOCKS; j++) {
-            if (i == j) continue;
-            if (read_free_block(file_descriptor, j, &b) != 0) continue;
-            if (b.size == 0) continue;
+    int cur = header.free_list_head;
 
-            // a end == b start ---> merge
-            if (a.start + a.size == b.start) {
-                a.size += b.size;
-                b.size = 0;
+    while (cur != -1)
+    {
+        free_block a;
+        read_free_block(fd, cur, &a);
 
-                write_free_block(file_descriptor, i, &a);
-                write_free_block(file_descriptor, j, &b);
-            }
+        int next = a.next;
+        if (next == -1)
+            break;
+
+        free_block b;
+        read_free_block(fd, next, &b);
+
+        // Not adjacent → move on
+        if (a.start + a.size != b.start) {
+            cur = next;
+            continue;
         }
+
+        // They ARE adjacent → merge
+        a.size += b.size;
+        a.next  = b.next;
+
+        write_free_block(fd, cur, &a);
+
+        // zero out merged slot
+        zero_free_block_slot(fd, next);
+
+        // DO NOT MOVE CUR — try merging again
     }
 }
-

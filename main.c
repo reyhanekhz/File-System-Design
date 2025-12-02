@@ -77,6 +77,17 @@ int initialize_filesystem(const char *path, int32_t size_bytes) {
         write(file_descriptor, zero, chunk);
         total_fb -= chunk;
     }
+        // Mark all free-block slots as empty (start = -1)
+    for (int i = 0; i < MAX_FREE_BLOCKS; i++) {
+        free_block empty;
+        empty.start = -1;
+        empty.size  = 0;
+        empty.next  = -1;
+        write_free_block(file_descriptor,
+                        i,
+                        &empty);
+    }
+
 
     // Initialize free list (the missing part causing freeze)
     init_free_list(file_descriptor);
@@ -191,6 +202,32 @@ int main() {
         // FS STATS
         if (strcmp(command, "fsstat\n") == 0) {
             get_fs_stats(file_descriptor);
+            continue;
+        }
+        // ALLOC (allocates a block of 'n' bytes and prints the start offset)
+        if (sscanf(command, "alloc %d", &n) == 1) {
+            int off = allocate_space(file_descriptor, n);
+            if (off == -1) {
+                printf("alloc failed: no suitable free block\n");
+            } else {
+                printf("Allocated %d bytes at offset %d\n", n, off);
+            }
+            continue;
+        }
+
+        // FREE (free a region starting at 'start' of length 'n')
+        if (sscanf(command, "free %d %d", &pos, &n) == 2) {
+            if (free_space(file_descriptor, pos, n) == 0) {
+                printf("Freed %d bytes starting at %d\n", n, pos);
+            } else {
+                printf("Free failed.\n");
+            }
+            continue;
+        }
+
+        // VIZ (print free list)
+        if (strcmp(command, "viz\n") == 0) {
+            print_free_list(file_descriptor);
             continue;
         }
 
